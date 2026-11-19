@@ -10,6 +10,7 @@ from fastmcp.exceptions import NotFoundError
 from fastmcp.server.dependencies import get_http_headers
 from fastmcp.server.middleware import CallNext, Middleware, MiddlewareContext
 
+from core.tool_registry import SERVICE_INDEPENDENT_TOOLS
 from core.tool_tier_loader import ToolTierLoader
 
 TOOLSETS_HEADER = "x-mcp-toolsets"
@@ -42,7 +43,13 @@ def requested_tools() -> Optional[set[str]]:
     if not toolsets and not tools:
         return None
     toolset_tools = _toolset_tools()
-    return tools.union(*(toolset_tools.get(name, ()) for name in toolsets))
+    allowed = tools.union(*(toolset_tools.get(name, ()) for name in toolsets))
+    if toolsets & toolset_tools.keys():
+        # Tools like list_google_accounts serve every service, so they come
+        # with any real toolset rather than only the one tool_tiers.yaml files
+        # them under.
+        allowed |= SERVICE_INDEPENDENT_TOOLS
+    return allowed
 
 
 class ToolsetHeaderMiddleware(Middleware):

@@ -283,8 +283,9 @@ For parameters: [references/search.md](references/search.md)
 | Task | Tool |
 |------|------|
 | Start OAuth flow | `start_google_auth` |
+| List account names, their emails and sign-in status | `list_google_accounts` |
 
-Legacy OAuth 2.0 only -- disabled when OAuth 2.1 is enabled. In most cases, just call the tool you need and auth happens automatically. For parameters: [references/server-options.md](references/server-options.md#start_google_auth)
+Legacy OAuth 2.0 only -- disabled when OAuth 2.1 is enabled. In most cases, just call the tool you need and auth happens automatically. When the server has account names (`WORKSPACE_MCP_ACCOUNTS_FILE`), pass a name as `user_google_email`. For parameters: [references/server-options.md](references/server-options.md#start_google_auth)
 
 ## Common Workflows
 

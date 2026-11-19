@@ -600,6 +600,14 @@ def main():
     except ValueError as exc:
         parser.error(str(exc))
 
+    # Fail at startup, not on the first tool call, if the accounts file is bad.
+    from core.accounts import AccountsConfigError, get_accounts
+
+    try:
+        get_accounts()
+    except AccountsConfigError as exc:
+        parser.error(str(exc))
+
     # Env var fallbacks for plugin users who configure via userConfig.
     # Non-empty but invalid values fail closed to prevent silent access widening.
     # Skip env fallbacks for mutually exclusive flags that were set on the CLI

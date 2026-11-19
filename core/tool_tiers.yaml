@@ -19,6 +19,9 @@ gmail:
     - get_gmail_threads_content_batch
     - batch_modify_gmail_message_labels
     - start_google_auth
+    # Not a Gmail tool; listed so it is tiered. SERVICE_INDEPENDENT_TOOLS in
+    # core/tool_registry.py keeps it whatever services and tier are selected.
+    - list_google_accounts
 
 drive:
   core:

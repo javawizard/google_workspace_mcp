@@ -17,6 +17,9 @@ from core.warning_filters import install_startup_warning_filters
 install_startup_warning_filters()
 
 from auth.auth_info_middleware import AuthInfoMiddleware
+from auth.credential_store import get_credential_store
+from core.account_alias_middleware import AccountAliasMiddleware
+from core.accounts import AccountsConfigError, get_accounts
 from core.camel_case_middleware import CamelCaseArgumentsMiddleware
 from core.portable_schema_middleware import PortableSchemaMiddleware
 from core.tool_descriptions import docstring_description
@@ -560,11 +563,23 @@ class SecureFastMCP(FastMCP):
 # Skipped in trusted-gateway mode: the verified principal supersedes the configured
 # default, and user_google_email is no longer a tool parameter clients can pass.
 _server_instructions = None
+try:
+    _startup_accounts = get_accounts()
+except AccountsConfigError:
+    # main.py checks the accounts file again after parsing arguments and exits
+    # with a readable error there.
+    _startup_accounts = None
 if USER_GOOGLE_EMAIL and not is_trust_gateway_identity():
     _server_instructions = f"""Connected Google account: {USER_GOOGLE_EMAIL}
 
 When using Google Workspace tools, always use `{USER_GOOGLE_EMAIL}` as the `user_google_email` parameter. Do not ask the user for their email address."""
     logger.info(f"Server instructions configured for user: {USER_GOOGLE_EMAIL}")
+elif _startup_accounts and not is_trust_gateway_identity() and not is_oauth21_enabled():
+    _account_names = ", ".join(_startup_accounts.names)
+    _server_instructions = f"""Google accounts are referred to by name: {_account_names}.
+
+Pass one of these names as the `user_google_email` parameter instead of an email address. Call `list_google_accounts` to see which email each name stands for and which accounts are signed in."""
+    logger.info(f"Server instructions configured for account names: {_account_names}")
 
 # Branding for the OAuth consent page: FastMCP's OAuth proxy renders the server's
 # name / icon / website on the consent screen (auth/oauth_config reads the env vars).
@@ -590,6 +605,10 @@ server.add_middleware(ToolsetHeaderMiddleware())
 # mirror the Google API field names, mapping them onto the snake_case tool
 # parameters. See https://github.com/taylorwilsdon/google_workspace_mcp/issues/918
 server.add_middleware(CamelCaseArgumentsMiddleware())
+
+# Accept account names from WORKSPACE_MCP_ACCOUNTS_FILE in user_google_email.
+# Must come after CamelCaseArgumentsMiddleware so userGoogleEmail is renamed first.
+server.add_middleware(AccountAliasMiddleware())
 
 # Add the AuthInfo middleware to inject authentication into FastMCP context
 auth_info_middleware = AuthInfoMiddleware()
@@ -1169,3 +1188,55 @@ async def start_google_auth(
     except Exception as e:
         logger.error(f"Failed to start Google authentication flow: {e}", exc_info=True)
         return f"**Error:** An unexpected error occurred: {e}"
+
+
+@server.tool(
+    title="List Google Accounts",
+    annotations=ToolAnnotations(
+        readOnlyHint=True,
+        destructiveHint=False,
+        idempotentHint=True,
+        openWorldHint=False,
+    ),
+)
+async def list_google_accounts() -> str:
+    """
+    List the configured Google account names, the email address each one stands
+    for, and whether the server has a saved login for it.
+
+    Any account name shown here can be passed as `user_google_email` in place of
+    the email address.
+    """
+    if is_oauth21_enabled() or is_trust_gateway_identity():
+        return (
+            "This server picks the Google account from your verified sign-in, so "
+            "account names aren't used and there is nothing to list."
+        )
+
+    accounts = get_accounts()
+    if accounts is None:
+        return (
+            "No Google account names are configured. Set WORKSPACE_MCP_ACCOUNTS_FILE "
+            "to name accounts; until then, pass a Google email address as "
+            "user_google_email."
+        )
+
+    try:
+        saved = {email.lower() for email in get_credential_store().list_users()}
+        saved_known = True
+    except Exception as e:
+        logger.warning(f"list_google_accounts: could not list stored credentials: {e}")
+        saved, saved_known = set(), False
+
+    def status(email: str) -> str:
+        # A saved login can still have been revoked; the next tool call that
+        # uses it will ask to sign in again if so.
+        if not saved_known:
+            return "login status unknown"
+        return "saved login" if email.lower() in saved else "no saved login yet"
+
+    lines = [
+        f"- {name}: {email} ({status(email)})"
+        for name, email in accounts.by_name.items()
+    ]
+    return "Google accounts:\n" + "\n".join(lines)

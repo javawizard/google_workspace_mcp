@@ -12,6 +12,9 @@ from core.tool_tier_loader import get_tools_for_tier
 
 DRIVE_TOOLS = set(get_tools_for_tier("complete", ["drive"]))
 GMAIL_TOOLS = set(get_tools_for_tier("complete", ["gmail"]))
+# What X-MCP-Toolsets: drive allows: drive's tools plus the tools that serve
+# every service (list_google_accounts).
+DRIVE_TOOLSET = DRIVE_TOOLS | tool_registry.SERVICE_INDEPENDENT_TOOLS
 
 
 async def _listed(headers: dict[str, str] | None = None) -> set[str]:
@@ -43,14 +46,14 @@ def operator_disabled_send(monkeypatch):
 async def test_toolsets_header_narrows_tools_list():
     unfiltered = await _listed()
 
-    assert await _listed({"X-MCP-Toolsets": "drive"}) == DRIVE_TOOLS & unfiltered
+    assert await _listed({"X-MCP-Toolsets": "drive"}) == DRIVE_TOOLSET & unfiltered
 
 
 @pytest.mark.asyncio
 async def test_tools_header_adds_to_toolsets():
     unfiltered = await _listed()
     tool = {"X-MCP-Tools": "search_gmail_messages"}
-    expected = (DRIVE_TOOLS | {"search_gmail_messages"}) & unfiltered
+    expected = (DRIVE_TOOLSET | {"search_gmail_messages"}) & unfiltered
 
     assert await _listed(tool) == {"search_gmail_messages"}
     assert await _listed({"X-MCP-Toolsets": "drive", **tool}) == expected
@@ -80,7 +83,7 @@ async def test_header_names_ignore_case_whitespace_and_duplicates():
         "x-mcp-toolsets": " Drive ,, DRIVE ",
         "X-MCP-TOOLS": " Search_Gmail_Messages ,search_gmail_messages",
     }
-    expected = (DRIVE_TOOLS | {"search_gmail_messages"}) & unfiltered
+    expected = (DRIVE_TOOLSET | {"search_gmail_messages"}) & unfiltered
 
     assert await _listed(headers) == expected
 
@@ -89,7 +92,7 @@ async def test_header_names_ignore_case_whitespace_and_duplicates():
 @pytest.mark.parametrize(
     ("headers", "expected"),
     [
-        ({"X-MCP-Toolsets": "drive,nope"}, DRIVE_TOOLS),
+        ({"X-MCP-Toolsets": "drive,nope"}, DRIVE_TOOLSET),
         ({"X-MCP-Toolsets": "nope"}, set()),
         ({"X-MCP-Tools": "not_a_tool"}, set()),
         ({"X-MCP-Toolsets": "dr\u0456ve".encode()}, set()),

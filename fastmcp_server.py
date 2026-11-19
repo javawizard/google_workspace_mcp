@@ -19,6 +19,11 @@ from core.file_limits import validate_file_limit_settings
 # here rather than relying on main.main(), which FastMCP Cloud does not call.
 validate_file_limit_settings()
 
+from core.accounts import get_accounts
+
+# Same reason: fail startup on a bad WORKSPACE_MCP_ACCOUNTS_FILE.
+get_accounts()
+
 from auth.oauth_config import reload_oauth_config, is_stateless_mode
 from core.log_formatter import (
     EnhancedLogFormatter,

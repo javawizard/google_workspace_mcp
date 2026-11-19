@@ -64,6 +64,11 @@ def resolve_disabled_tools(cli_names: Optional[list[str]] = None) -> Set[str]:
     return {name.strip().lower() for name in raw if name.strip()}
 
 
+# Tools that don't call any Google API, so service, tier and permission
+# selection never removes them.
+SERVICE_INDEPENDENT_TOOLS = frozenset({"list_google_accounts"})
+
+
 def is_tool_enabled(tool_name: str) -> bool:
     """Check if a specific tool is enabled."""
     if _enabled_tools is None:
@@ -162,9 +167,12 @@ def filter_server_tools(server) -> int:
 
     tools_to_remove = set()
 
-    # 1. Tier filtering
+    # 1. Tier filtering (tools that belong to no service, like
+    # list_google_accounts, are never in a tier and always stay)
     if enabled_tools is not None:
         for tool_name in tool_components:
+            if tool_name in SERVICE_INDEPENDENT_TOOLS:
+                continue
             if not is_tool_enabled(tool_name):
                 tools_to_remove.add(tool_name)
 
@@ -172,6 +180,9 @@ def filter_server_tools(server) -> int:
     if oauth21_enabled and "start_google_auth" in tool_components:
         tools_to_remove.add("start_google_auth")
         logger.info("OAuth 2.1 enabled: disabling start_google_auth tool")
+    if oauth21_enabled and "list_google_accounts" in tool_components:
+        tools_to_remove.add("list_google_accounts")
+        logger.info("OAuth 2.1 enabled: disabling list_google_accounts tool")
 
     # 3. Read-only mode filtering (skipped when granular permissions are active)
     if read_only_mode and not permissions_mode:

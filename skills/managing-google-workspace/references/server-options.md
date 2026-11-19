@@ -92,6 +92,9 @@ Manually start the legacy OAuth 2.0 browser flow, e.g. to re-authenticate with d
 | user_google_email | string | no | `USER_GOOGLE_EMAIL` env | |
 | service_name | string | yes | | Service to authorize, e.g. `"gmail"`, `"drive"` |
 
+### list_google_accounts
+List the account names from `WORKSPACE_MCP_ACCOUNTS_FILE`, the email each one stands for, and whether it is signed in. Any listed name can be passed as `user_google_email`. Takes no parameters. Legacy OAuth 2.0 only; OAuth 2.1 and trusted-gateway modes take the account from the verified sign-in.
+
 ## Credential loading priority
 
 1. Environment variables (including those from `~/.claude/settings.local.json` or `~/.claude/settings.json` `env` blocks)

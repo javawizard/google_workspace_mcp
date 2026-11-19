@@ -608,6 +608,13 @@ def main():
     except AccountsConfigError as exc:
         parser.error(str(exc))
 
+    from core.server import get_reject_browser_requests
+
+    try:
+        get_reject_browser_requests()
+    except ValueError as exc:
+        parser.error(str(exc))
+
     # Env var fallbacks for plugin users who configure via userConfig.
     # Non-empty but invalid values fail closed to prevent silent access widening.
     # Skip env fallbacks for mutually exclusive flags that were set on the CLI

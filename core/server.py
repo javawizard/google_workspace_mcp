@@ -122,6 +122,10 @@ _SESSION_IDLE_TIMEOUT_ENV = "WORKSPACE_MCP_SESSION_IDLE_TIMEOUT"
 _DEFAULT_SESSION_IDLE_TIMEOUT_SECONDS = 60 * 60 + 60
 _GOOGLE_API_WORKERS_ENV = "WORKSPACE_MCP_GOOGLE_API_WORKERS"
 _ALLOWED_HOSTS_ENV = "WORKSPACE_MCP_ALLOWED_HOSTS"
+_REJECT_BROWSER_REQUESTS_ENV = "WORKSPACE_MCP_REJECT_BROWSER_REQUESTS"
+# The legacy OAuth 2.0 redirect from Google lands here as a top-level page load,
+# so it is the one browser request a browser-free deployment still needs.
+_BROWSER_NAVIGATION_PATHS = frozenset({"/oauth2callback"})
 
 
 def _parse_bool_env(value: str) -> bool:
@@ -237,14 +241,61 @@ def _is_null_origin_consent_compat_allowed(scope: Scope, origin: str) -> bool:
     return _parse_bool_env(os.getenv(_ALLOW_NULL_ORIGIN_CONSENT_ENV, "").strip())
 
 
+def get_reject_browser_requests() -> bool:
+    """Parse WORKSPACE_MCP_REJECT_BROWSER_REQUESTS; ValueError when invalid."""
+    raw = os.getenv(_REJECT_BROWSER_REQUESTS_ENV, "").strip().lower()
+    if raw in ("", "0", "false", "no", "off"):
+        return False
+    if raw in ("1", "true", "yes", "on"):
+        return True
+    raise ValueError(
+        f"{_REJECT_BROWSER_REQUESTS_ENV} must be true or false, got {raw!r}"
+    )
+
+
+def _is_browser_request(headers: dict) -> bool:
+    """True when a request carries headers only browsers send.
+
+    Browsers add Sec-Fetch-* to every request (Chrome 76+, Firefox 90+, Safari
+    16.4+) and Origin to every non-GET or cross-origin one. MCP clients such as
+    Claude Code send neither.
+    """
+    return b"origin" in headers or any(
+        name.startswith(b"sec-fetch-") for name in headers
+    )
+
+
+def _is_allowed_browser_navigation(scope: Scope, headers: dict) -> bool:
+    """Allow only a plain GET page load of the OAuth callback."""
+    if (
+        scope.get("method") != "GET"
+        or scope.get("path") not in _BROWSER_NAVIGATION_PATHS
+    ):
+        return False
+    if b"origin" in headers:
+        return False
+    mode = headers.get(b"sec-fetch-mode")
+    return mode is None or mode == b"navigate"
+
+
 class OriginValidationMiddleware:
-    """Reject browser-originated HTTP requests from untrusted origins."""
+    """Reject browser-originated HTTP requests from untrusted origins.
+
+    With ``reject_browser_requests`` set, every request that comes from a
+    browser is rejected, including pages on localhost, except Google's OAuth
+    redirect back to the callback page. Use it when no browser-based client
+    needs the server, so no web page can drive it.
+    """
 
     def __init__(
-        self, app: ASGIApp, allowed_hosts: Optional[frozenset[str]] = None
+        self,
+        app: ASGIApp,
+        allowed_hosts: Optional[frozenset[str]] = None,
+        reject_browser_requests: bool = False,
     ) -> None:
         self.app = app
         self.allowed_hosts = allowed_hosts
+        self.reject_browser_requests = reject_browser_requests
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http":
@@ -257,6 +308,22 @@ class OriginValidationMiddleware:
             ):
                 logger.warning("Rejected HTTP request for Host: %s", host_header)
                 response = JSONResponse({"error": "Host not allowed"}, status_code=403)
+                await response(scope, receive, send)
+                return
+            if (
+                self.reject_browser_requests
+                and _is_browser_request(headers)
+                and not _is_allowed_browser_navigation(scope, headers)
+            ):
+                logger.warning(
+                    "Rejected browser request for %s %s (Origin: %r)",
+                    scope.get("method"),
+                    scope.get("path"),
+                    raw_origin.decode("latin-1") if raw_origin else None,
+                )
+                response = JSONResponse(
+                    {"error": "Browser requests not allowed"}, status_code=403
+                )
                 await response(scope, receive, send)
                 return
             if raw_origin:
@@ -473,7 +540,12 @@ class SecureFastMCP(FastMCP):
         # Add middleware in order (first added = outermost layer)
         app.user_middleware.insert(0, well_known_cache_control_middleware)
         app.user_middleware.insert(
-            1, Middleware(OriginValidationMiddleware, allowed_hosts=get_allowed_hosts())
+            1,
+            Middleware(
+                OriginValidationMiddleware,
+                allowed_hosts=get_allowed_hosts(),
+                reject_browser_requests=get_reject_browser_requests(),
+            ),
         )
 
         # Session Management - extracts session info for MCP context

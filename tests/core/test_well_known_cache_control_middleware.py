@@ -522,3 +522,87 @@ def test_external_oauth_metadata_matches_mcp_resource_and_challenge(monkeypatch)
         '.well-known/oauth-protected-resource/mcp"'
         in challenge.headers["www-authenticate"]
     )
+
+
+def _browser_rejecting_client(monkeypatch) -> TestClient:
+    from core.server import OriginValidationMiddleware
+
+    monkeypatch.setattr(
+        "auth.oauth_config.get_oauth_config",
+        lambda: SimpleNamespace(
+            get_allowed_origins=lambda: ["http://localhost:8000"],
+            external_url=None,
+        ),
+    )
+
+    async def endpoint(request):
+        return Response("ok")
+
+    app = Starlette(
+        routes=[
+            Route("/mcp", endpoint, methods=["GET", "POST", "OPTIONS"]),
+            Route("/oauth2callback", endpoint, methods=["GET", "POST"]),
+        ],
+        middleware=[
+            Middleware(OriginValidationMiddleware, reject_browser_requests=True)
+        ],
+    )
+    return TestClient(app)
+
+
+def test_reject_browser_requests_blocks_localhost_pages(monkeypatch):
+    client = _browser_rejecting_client(monkeypatch)
+
+    # MCP clients like Claude Code send neither Origin nor Sec-Fetch-*.
+    assert client.post("/mcp").status_code == 200
+    assert client.get("/mcp").status_code == 200
+
+    # A page on localhost is normally trusted; with the option it is not.
+    for headers in (
+        {"Origin": "http://localhost:5173"},
+        {"Origin": "vscode-webview://abc"},
+        {"Origin": "null"},
+        # Same-origin GET fetch (DNS rebinding) sends no Origin, only Sec-Fetch-*.
+        {"Sec-Fetch-Site": "same-origin", "Sec-Fetch-Mode": "cors"},
+        {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "no-cors"},
+    ):
+        assert client.post("/mcp", headers=headers).status_code == 403, headers
+        assert client.get("/mcp", headers=headers).status_code == 403, headers
+    assert (
+        client.options("/mcp", headers={"Origin": "http://localhost:5173"}).status_code
+        == 403
+    )
+
+
+def test_reject_browser_requests_allows_oauth_callback_page_load(monkeypatch):
+    client = _browser_rejecting_client(monkeypatch)
+    navigation = {"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "navigate"}
+
+    assert client.get("/oauth2callback?code=x", headers=navigation).status_code == 200
+    # Only a page load counts: not a fetch, a POST, or a page load elsewhere.
+    assert (
+        client.get(
+            "/oauth2callback",
+            headers={"Sec-Fetch-Site": "cross-site", "Sec-Fetch-Mode": "cors"},
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            "/oauth2callback", headers={**navigation, "Origin": "https://evil.test"}
+        ).status_code
+        == 403
+    )
+    assert client.get("/mcp", headers=navigation).status_code == 403
+
+
+def test_get_reject_browser_requests_parses_env(monkeypatch):
+    from core.server import get_reject_browser_requests
+
+    monkeypatch.delenv("WORKSPACE_MCP_REJECT_BROWSER_REQUESTS", raising=False)
+    assert get_reject_browser_requests() is False
+    monkeypatch.setenv("WORKSPACE_MCP_REJECT_BROWSER_REQUESTS", "TRUE")
+    assert get_reject_browser_requests() is True
+    monkeypatch.setenv("WORKSPACE_MCP_REJECT_BROWSER_REQUESTS", "ture")
+    with pytest.raises(ValueError, match="must be true or false"):
+        get_reject_browser_requests()
